@@ -1,82 +1,38 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
+import { jsPDF } from 'jspdf';
+import { YouTubeComingSoon } from "./YoutubeComingSoon";
+import { TOKEN } from "./constants";
 
-
-
-// ─── Inline styles / design tokens ───────────────────────────────────────────
-const TOKEN = {
-    paper: "#F7F3EC",
-    card: "#FDFAF5",
-    cream: "#EDE8DC",
-    ink: "#141210",
-    muted: "#8C8274",
-    border: "#D8D0C4",
-    accent: "#C13B0C",
-    green: "#1A5C3A",
-    highlight: "#F0C93A",
-    font: {
-        display: "'Playfair Display', Georgia, serif",
-        mono: "'DM Mono', 'Courier New', monospace",
-        body: "'DM Sans', sans-serif",
-    },
-};
 
 const POINT_COLORS = ["#C9A227", "#1A5C3A", "#B03838"];
 
-// ─── Tiny reusable pieces ─────────────────────────────────────────────────────
 const Label = ({ children, style }) => (
-    <div
-        style={{
-            fontFamily: TOKEN.font.mono,
-            fontSize: "0.6rem",
-            letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: TOKEN.muted,
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-            ...style,
-        }}
-    >
-        <span
-            style={{
-                display: "inline-block",
-                width: 16,
-                height: 1.5,
-                background: TOKEN.accent,
-                flexShrink: 0,
-            }}
-        />
+    <div style={{
+        fontFamily: TOKEN.font.mono, fontSize: "0.6rem", letterSpacing: "0.18em",
+        textTransform: "uppercase", color: TOKEN.muted,
+        display: "flex", alignItems: "center", gap: "0.5rem", ...style,
+    }}>
+        <span style={{ display: "inline-block", width: 16, height: 1.5, background: TOKEN.accent, flexShrink: 0 }} />
         {children}
     </div>
 );
 
 const Toast = ({ msg }) => (
-    <div
-        style={{
-            position: "fixed",
-            bottom: "2rem",
-            right: "2rem",
-            background: TOKEN.ink,
-            color: TOKEN.paper,
-            fontFamily: TOKEN.font.mono,
-            fontSize: "0.75rem",
-            padding: "0.85rem 1.4rem",
-            borderRadius: 4,
-            zIndex: 1000,
-            pointerEvents: "none",
-            boxShadow: "0 4px 24px rgba(0,0,0,0.18)",
-            animation: "toastIn 0.3s ease",
-        }}
-    >
-        {msg}
-    </div>
+    <div style={{
+        position: "fixed", bottom: "2rem", right: "2rem",
+        background: TOKEN.ink, color: TOKEN.paper,
+        fontFamily: TOKEN.font.mono, fontSize: "0.75rem",
+        padding: "0.85rem 1.4rem", borderRadius: 4, zIndex: 1000,
+        pointerEvents: "none", boxShadow: "0 4px 24px rgba(0,0,0,0.18)",
+        animation: "toastIn 0.3s ease",
+    }}>{msg}</div>
 );
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function DistillApp() {
     // Input state
     const [tab, setTab] = useState("url");
     const [url, setUrl] = useState("");
+    const [youtubeUrl, setYoutubeUrl] = useState("");
     const [pastedText, setPastedText] = useState("");
     const [selectedFile, setSelectedFile] = useState(null);
     const [dragOver, setDragOver] = useState(false);
@@ -85,14 +41,13 @@ export default function DistillApp() {
 
     // Output state
     const [loading, setLoading] = useState(false);
-    const [notes, setNotes] = useState(null); // { title, summary, keyPoints[], source }
+    const [notes, setNotes] = useState(null);
     const [toast, setToast] = useState(null);
 
-    // Editing state (lifted so we can export)
+    // Editable output state
     const [editTitle, setEditTitle] = useState("");
     const [editSummary, setEditSummary] = useState("");
-    const [editPoints, setEditPoints] = useState([]); // [{id, text, colorIdx}]
-
+    const [editPoints, setEditPoints] = useState([]);
     const nextId = useRef(1);
 
     useEffect(() => {
@@ -109,24 +64,19 @@ export default function DistillApp() {
         }
     }, [notes]);
 
-    // ── helpers ──
-    const showToast = (msg) => {
-        setToast(msg);
-        setTimeout(() => setToast(null), 3000);
-    };
-
+    const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 3000); };
     const toggleChip = (chip) =>
-        setFocusChips((prev) =>
-            prev.includes(chip) ? prev.filter((c) => c !== chip) : [...prev, chip]
-        );
-
+        setFocusChips(prev => prev.includes(chip) ? prev.filter(c => c !== chip) : [...prev, chip]);
     const setFile = (f) => setSelectedFile(f);
-    const removeFile = () => {
-        setSelectedFile(null);
-        if (fileRef.current) fileRef.current.value = "";
+    const removeFile = () => { setSelectedFile(null); if (fileRef.current) fileRef.current.value = ""; };
+
+    // ── Parse and set notes from AI response ──
+    const parseAndSetNotes = (rawText, sourceLabel) => {
+        const clean = rawText.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(clean);
+        setNotes({ ...parsed, source: sourceLabel });
     };
 
-    // ── extract ──
     const extract = async () => {
         let content = "";
         let sourceLabel = "";
@@ -144,16 +94,16 @@ export default function DistillApp() {
                 r.readAsText(selectedFile);
             });
             sourceLabel = selectedFile.name;
-        } else {
+        } else if (tab === "text") {
             if (!pastedText.trim()) return showToast("Please paste some text");
             content = pastedText.trim();
             sourceLabel = "Pasted text";
         }
+        // } else if (tab === "youtube") {
+        //     return extractYoutube(); // handled separately
+        // }
 
         const focus = focusChips.length ? focusChips.join(", ") : "key insights";
-        setLoading(true);
-        setNotes(null);
-
         const prompt = `You are a smart note-taking assistant. Analyze the following content and extract structured notes.
 
 Content:
@@ -174,31 +124,23 @@ Return ONLY valid JSON in this exact shape:
 
 Rules:
 - Extract 5-10 key points depending on content length
-- Each point should be a standalone, actionable or informative sentence
+- Each point should be standalone, actionable or informative
 - Vary type between: insight, action, data, quote, definition
 - Be specific and concrete
 - Return ONLY the JSON object, no markdown fences, no explanation`;
 
+        setLoading(true);
+        setNotes(null);
+
         try {
-            // const res = await fetch("https://api.anthropic.com/v1/messages", {
-            //     method: "POST",
-            //     headers: { "Content-Type": "application/json" },
-            //     body: JSON.stringify({
-            //         model: "claude-sonnet-4-20250514",
-            //         max_tokens: 1000,
-            //         messages: [{ role: "user", content: prompt }],
-            //     }),
-            // });
             const res = await fetch("/api/claude", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000 }),
+                body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
             });
             const data = await res.json();
-            const raw = (data.content || []).map((b) => b.text || "").join("");
-            const clean = raw.replace(/```json|```/g, "").trim();
-            const parsed = JSON.parse(clean);
-            setNotes({ ...parsed, source: sourceLabel });
+            if (data.error) throw new Error(data.error);
+            parseAndSetNotes(data.content[0].text, sourceLabel);
         } catch (err) {
             showToast("Error: " + err.message);
         } finally {
@@ -206,24 +148,48 @@ Rules:
         }
     };
 
-    // ── point CRUD ──
-    const updatePoint = (id, text) =>
-        setEditPoints((prev) => prev.map((p) => (p.id === id ? { ...p, text } : p)));
-    const deletePoint = (id) =>
-        setEditPoints((prev) => prev.filter((p) => p.id !== id));
-    const addPoint = () =>
-        setEditPoints((prev) => [
-            ...prev,
-            {
-                id: nextId.current++,
-                text: "New note — click to edit",
-                colorIdx: prev.length % POINT_COLORS.length,
-            },
-        ]);
+    // ── Extract YouTube ──
+    const extractYoutube = async () => {
+        if (!youtubeUrl.trim()) return showToast("Please enter a YouTube URL");
 
-    // ── export PDF ──
+        // Basic YouTube URL validation
+        const isYoutube = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)/.test(youtubeUrl.trim());
+        if (!isYoutube) return showToast("Please enter a valid YouTube URL");
+
+        setLoading(true);
+        setNotes(null);
+
+        try {
+            const focus = focusChips.length ? focusChips.join(", ") : "key insights";
+            const res = await fetch("/api/youtube", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: youtubeUrl.trim(), focus }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            parseAndSetNotes(data.content[0].text, youtubeUrl.trim());
+        } catch (err) {
+            showToast("Error: " + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // ── Point CRUD ──
+    const updatePoint = (id, text) =>
+        setEditPoints(prev => prev.map(p => p.id === id ? { ...p, text } : p));
+    const deletePoint = (id) =>
+        setEditPoints(prev => prev.filter(p => p.id !== id));
+    const addPoint = () =>
+        setEditPoints(prev => [...prev, {
+            id: nextId.current++,
+            text: "New note — click to edit",
+            colorIdx: prev.length % POINT_COLORS.length,
+        }]);
+
+    // ── Export PDF ──
     const exportPDF = () => {
-        const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ unit: "pt", format: "a4" });
         const M = 50;
         const W = doc.internal.pageSize.getWidth() - M * 2;
@@ -234,7 +200,7 @@ Rules:
             doc.setFont("helvetica", bold ? "bold" : "normal");
             doc.setTextColor(...color);
             const lines = doc.splitTextToSize(String(text), W);
-            lines.forEach((line) => {
+            lines.forEach(line => {
                 if (y > 780) { doc.addPage(); y = M; }
                 doc.text(line, M, y);
                 y += size * 1.5;
@@ -270,16 +236,10 @@ Rules:
         showToast("PDF exported!");
     };
 
-    // ── export DOCX ──
+    // ── Export DOCX ──
     const exportDocx = () => {
-        const date = new Date().toLocaleDateString("en-US", {
-            year: "numeric", month: "long", day: "numeric",
-        });
-        const esc = (s) =>
-            String(s)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;");
+        const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+        const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
         const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
@@ -296,7 +256,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
 <div class="lbl">Summary</div>
 <div class="summary">${esc(editSummary)}</div>
 <div class="lbl">Key Points</div>
-<ul>${editPoints.map((p) => `<li>${esc(p.text)}</li>`).join("")}</ul>
+<ul>${editPoints.map(p => `<li>${esc(p.text)}</li>`).join("")}</ul>
 <div class="footer">Exported with Distill — AI Notes Extractor</div>
 </body></html>`;
 
@@ -310,7 +270,14 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
 
     const hasNotes = !!notes && !loading;
 
-    // ─── Render ──────────────────────────────────────────────────────────────────
+    const TABS = [
+        ["url", "🔗 URL"],
+        ["youtube", "▶️ YouTube"],
+        ["file", "📄 File"],
+        ["text", "✏️ Text"],
+    ];
+
+    // ─── Render ───────────────────────────────────────────────────────────────────
     return (
         <>
             <style>{`
@@ -322,12 +289,20 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
         @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         @keyframes slideUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
         @keyframes shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .point-item:hover .point-del { opacity: 1 !important; }
         .export-btn:hover:not(:disabled) { background: ${TOKEN.ink} !important; color: ${TOKEN.paper} !important; border-color: ${TOKEN.ink} !important; }
         .tab-btn:not(.active):hover { background: ${TOKEN.cream}; }
         .extract-btn:hover:not(:disabled) { background: #A3330A !important; transform: translateY(-1px); }
         .upload-zone:hover { border-color: ${TOKEN.accent} !important; background: #fdf4ef !important; }
         .add-btn:hover { border-color: ${TOKEN.green} !important; color: ${TOKEN.green} !important; }
+        .yt-input-wrap { position: relative; }
+        .yt-badge {
+          position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%);
+          background: ${TOKEN.youtube}; color: white; font-size: 0.6rem;
+          font-family: ${TOKEN.font.mono}; letter-spacing: 0.08em;
+          padding: 0.2rem 0.5rem; border-radius: 2px; pointer-events: none;
+        }
       `}</style>
 
             {/* HEADER */}
@@ -343,9 +318,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                     fontFamily: TOKEN.font.mono, fontSize: "0.62rem", letterSpacing: "0.15em",
                     textTransform: "uppercase", color: TOKEN.muted,
                     border: `1px solid ${TOKEN.border}`, padding: "0.3rem 0.75rem", borderRadius: 2,
-                }}>
-                    AI Notes Extractor
-                </div>
+                }}>AI Notes Extractor</div>
             </header>
 
             {/* TWO-COLUMN LAYOUT */}
@@ -354,8 +327,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                 {/* ── LEFT: INPUT ── */}
                 <div style={{
                     padding: "2.5rem 3rem", borderRight: `1.5px solid ${TOKEN.border}`,
-                    display: "flex", flexDirection: "column", gap: "1.75rem",
-                    background: TOKEN.paper,
+                    display: "flex", flexDirection: "column", gap: "1.75rem", background: TOKEN.paper,
                 }}>
                     <div>
                         <Label>Source</Label>
@@ -366,18 +338,20 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
 
                     {/* TABS */}
                     <div style={{ display: "flex", border: `1.5px solid ${TOKEN.border}`, borderRadius: 4, overflow: "hidden" }}>
-                        {[["url", "🔗 URL"], ["file", "📄 File"], ["text", "✏️ Text"]].map(([key, label]) => (
+                        {TABS.map(([key, label], i) => (
                             <button
                                 key={key}
                                 className="tab-btn"
                                 onClick={() => setTab(key)}
                                 style={{
-                                    flex: 1, padding: "0.7rem 1rem", border: "none", cursor: "pointer",
-                                    fontFamily: TOKEN.font.mono, fontSize: "0.7rem", letterSpacing: "0.06em",
+                                    flex: 1, padding: "0.7rem 0.5rem", border: "none", cursor: "pointer",
+                                    fontFamily: TOKEN.font.mono, fontSize: "0.65rem", letterSpacing: "0.04em",
                                     textTransform: "uppercase", transition: "all 0.2s",
-                                    borderRight: `1.5px solid ${TOKEN.border}`,
-                                    background: tab === key ? TOKEN.ink : "transparent",
-                                    color: tab === key ? TOKEN.paper : TOKEN.muted,
+                                    borderRight: i < TABS.length - 1 ? `1.5px solid ${TOKEN.border}` : "none",
+                                    background: tab === key
+                                        ? (key === "youtube" ? TOKEN.youtube : TOKEN.ink)
+                                        : "transparent",
+                                    color: tab === key ? "white" : TOKEN.muted,
                                 }}
                             >{label}</button>
                         ))}
@@ -386,9 +360,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                     {/* URL */}
                     {tab === "url" && (
                         <input
-                            type="text"
-                            value={url}
-                            onChange={(e) => setUrl(e.target.value)}
+                            type="text" value={url} onChange={e => setUrl(e.target.value)}
                             placeholder="https://example.com/article..."
                             style={{
                                 width: "100%", padding: "1rem 1.25rem",
@@ -399,15 +371,43 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                         />
                     )}
 
+                    {/* YOUTUBE */}
+                    {/* {tab === "youtube" && (
+                        <div>
+                            <div className="yt-input-wrap">
+                                <input
+                                    type="text" value={youtubeUrl} onChange={e => setYoutubeUrl(e.target.value)}
+                                    placeholder="https://youtube.com/watch?v=..."
+                                    style={{
+                                        width: "100%", padding: "1rem 5rem 1rem 1.25rem",
+                                        border: `1.5px solid ${TOKEN.youtube}44`, borderRadius: 4,
+                                        background: TOKEN.card, fontFamily: TOKEN.font.mono,
+                                        fontSize: "0.85rem", color: TOKEN.ink,
+                                    }}
+                                />
+                                <span className="yt-badge">YouTube</span>
+                            </div>
+                            <div style={{
+                                marginTop: "0.75rem", padding: "0.85rem 1rem",
+                                background: "#fff8f8", border: `1px solid ${TOKEN.youtube}22`,
+                                borderRadius: 4, fontSize: "0.78rem", color: TOKEN.muted,
+                                fontFamily: TOKEN.font.mono, lineHeight: 1.6,
+                            }}>
+                                ℹ️ Works with videos that have captions enabled (most videos do). Shorts and private videos may not work.
+                            </div>
+                        </div>
+                    )} */}
+                    {tab === "youtube" && <YouTubeComingSoon />}
+
                     {/* FILE */}
                     {tab === "file" && (
                         <>
                             {!selectedFile ? (
                                 <div
                                     className="upload-zone"
-                                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                                    onDragOver={e => { e.preventDefault(); setDragOver(true); }}
                                     onDragLeave={() => setDragOver(false)}
-                                    onDrop={(e) => { e.preventDefault(); setDragOver(false); setFile(e.dataTransfer.files[0]); }}
+                                    onDrop={e => { e.preventDefault(); setDragOver(false); setFile(e.dataTransfer.files[0]); }}
                                     onClick={() => fileRef.current?.click()}
                                     style={{
                                         border: `2px dashed ${dragOver ? TOKEN.accent : TOKEN.border}`,
@@ -423,7 +423,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                                         PDF or TXT supported
                                     </div>
                                     <input ref={fileRef} type="file" accept=".pdf,.txt,.md"
-                                        style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+                                        style={{ display: "none" }} onChange={e => setFile(e.target.files[0])} />
                                 </div>
                             ) : (
                                 <div style={{
@@ -443,8 +443,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                     {/* TEXT */}
                     {tab === "text" && (
                         <textarea
-                            value={pastedText}
-                            onChange={(e) => setPastedText(e.target.value)}
+                            value={pastedText} onChange={e => setPastedText(e.target.value)}
                             placeholder="Paste your article, report, or any content here..."
                             style={{
                                 width: "100%", minHeight: 200, padding: "1.1rem 1.25rem",
@@ -456,13 +455,12 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                     )}
 
                     {/* FOCUS CHIPS */}
-                    <div>
+                    {tab !== "youtube" && <div>
                         <Label style={{ marginBottom: "0.75rem" }}>Focus on</Label>
                         <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-                            {["Key insights", "Action items", "Statistics & data", "Quotes", "Definitions"].map((chip) => (
+                            {["Key insights", "Action items", "Statistics & data", "Quotes", "Definitions"].map(chip => (
                                 <button
-                                    key={chip}
-                                    onClick={() => toggleChip(chip)}
+                                    key={chip} onClick={() => toggleChip(chip)}
                                     style={{
                                         padding: "0.4rem 0.9rem",
                                         border: `1.5px solid ${focusChips.includes(chip) ? TOKEN.ink : TOKEN.border}`,
@@ -474,33 +472,35 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                                 >{chip}</button>
                             ))}
                         </div>
-                    </div>
+                    </div>}
 
                     {/* EXTRACT BUTTON */}
-                    <button
+                    {tab !== "youtube" && <button
                         className="extract-btn"
                         onClick={extract}
                         disabled={loading}
                         style={{
-                            padding: "1.05rem 2.5rem", background: TOKEN.accent, color: "white",
-                            border: "none", borderRadius: 4, cursor: loading ? "not-allowed" : "pointer",
+                            padding: "1.05rem 2.5rem",
+                            background: tab === "youtube" ? TOKEN.youtube : TOKEN.accent,
+                            color: "white", border: "none", borderRadius: 4,
+                            cursor: loading ? "not-allowed" : "pointer",
                             fontFamily: TOKEN.font.display, fontSize: "1.05rem", fontWeight: 700,
                             alignSelf: "flex-start", transition: "all 0.2s",
-                            opacity: loading ? 0.6 : 1,
-                            position: "relative", overflow: "hidden",
+                            opacity: loading ? 0.6 : 1, position: "relative", overflow: "hidden",
                         }}
                     >
-                        {loading ? "Extracting…" : "Extract Notes →"}
+                        {loading
+                            ? (tab === "youtube" ? "Fetching transcript…" : "Extracting…")
+                            : (tab === "youtube" ? "Extract from YouTube →" : "Extract Notes →")
+                        }
                         {loading && (
                             <span style={{
                                 position: "absolute", bottom: 0, left: 0, right: 0, height: 3,
-                                background: "rgba(255,255,255,0.45)",
-                                animation: "shimmer 1.4s infinite",
                                 backgroundImage: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)",
-                                backgroundSize: "200% 100%",
+                                backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite",
                             }} />
                         )}
-                    </button>
+                    </button>}
                 </div>
 
                 {/* ── RIGHT: OUTPUT ── */}
@@ -519,16 +519,14 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
                             {[["↓ PDF", exportPDF], ["↓ DOCX", exportDocx]].map(([label, fn]) => (
                                 <button
-                                    key={label}
-                                    className="export-btn"
-                                    onClick={fn}
-                                    disabled={!hasNotes}
+                                    key={label} className="export-btn" onClick={fn} disabled={!hasNotes}
                                     style={{
                                         padding: "0.5rem 1rem", border: `1.5px solid ${TOKEN.border}`,
-                                        borderRadius: 4, background: TOKEN.paper, cursor: hasNotes ? "pointer" : "not-allowed",
-                                        fontFamily: TOKEN.font.mono, fontSize: "0.68rem", letterSpacing: "0.08em",
-                                        textTransform: "uppercase", color: TOKEN.ink, transition: "all 0.2s",
-                                        opacity: hasNotes ? 1 : 0.4,
+                                        borderRadius: 4, background: TOKEN.paper,
+                                        cursor: hasNotes ? "pointer" : "not-allowed",
+                                        fontFamily: TOKEN.font.mono, fontSize: "0.68rem",
+                                        letterSpacing: "0.08em", textTransform: "uppercase",
+                                        color: TOKEN.ink, transition: "all 0.2s", opacity: hasNotes ? 1 : 0.4,
                                     }}
                                 >{label}</button>
                             ))}
@@ -545,7 +543,7 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                             <div style={{ fontSize: "3.5rem" }}>🌿</div>
                             <div style={{ fontFamily: TOKEN.font.display, fontSize: "1.25rem" }}>Nothing extracted yet</div>
                             <div style={{ fontSize: "0.83rem", color: TOKEN.muted, maxWidth: 260, lineHeight: 1.7 }}>
-                                Add a URL, upload a file, or paste text on the left to get started.
+                                Add a URL, paste a YouTube link, upload a file, or paste text to get started.
                             </div>
                         </div>
                     )}
@@ -553,6 +551,22 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                     {/* SKELETON */}
                     {loading && (
                         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                            {/* {tab === "youtube" && (
+                                <div style={{
+                                    display: "flex", alignItems: "center", gap: "0.75rem",
+                                    padding: "0.85rem 1rem", background: "#fff8f8",
+                                    border: `1px solid ${TOKEN.youtube}22`, borderRadius: 4,
+                                    fontFamily: TOKEN.font.mono, fontSize: "0.72rem", color: TOKEN.muted,
+                                }}>
+                                    <div style={{
+                                        width: 14, height: 14, border: `2px solid ${TOKEN.youtube}`,
+                                        borderTopColor: "transparent", borderRadius: "50%",
+                                        animation: "spin 0.8s linear infinite", flexShrink: 0,
+                                    }} />
+                                    Fetching transcript and generating notes…
+                                </div>
+                            )} */}
+                            {tab === "youtube" && <YouTubeComingSoon />}
                             {[["70%", 22], ["40%", 12], ["100%", 80], ["100%", 52], ["100%", 52], ["80%", 52]].map(([w, h], i) => (
                                 <div key={i} style={{
                                     width: w, height: h, borderRadius: 3,
@@ -571,19 +585,21 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
 
                             {/* Source tag */}
                             <div style={{
-                                display: "inline-flex", alignItems: "center", gap: "0.4rem",
+                                display: "inline-flex", alignItems: "center", gap: "0.5rem",
                                 fontFamily: TOKEN.font.mono, fontSize: "0.65rem", color: TOKEN.muted,
-                                background: TOKEN.cream, padding: "0.3rem 0.65rem", borderRadius: 2,
+                                background: notes.source?.includes("youtube") || notes.source?.includes("youtu.be")
+                                    ? "#fff0f0" : TOKEN.cream,
+                                padding: "0.3rem 0.65rem", borderRadius: 2,
                                 maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                             }}>
-                                📎 {notes.source}
+                                {notes.source?.includes("youtube") || notes.source?.includes("youtu.be") ? "▶️" : "📎"}
+                                {notes.source}
                             </div>
 
                             {/* Title */}
                             <div
-                                contentEditable
-                                suppressContentEditableWarning
-                                onBlur={(e) => setEditTitle(e.target.textContent)}
+                                contentEditable suppressContentEditableWarning
+                                onBlur={e => setEditTitle(e.target.textContent)}
                                 style={{
                                     fontFamily: TOKEN.font.display, fontSize: "1.45rem", fontWeight: 700,
                                     lineHeight: 1.3, paddingBottom: "1rem", borderBottom: `1.5px solid ${TOKEN.border}`,
@@ -591,19 +607,22 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                             >{editTitle}</div>
 
                             {/* Summary */}
-                            <div style={{ padding: "1.1rem 1.25rem", borderLeft: `3px solid ${TOKEN.accent}`, background: "#fdf4ef", borderRadius: "0 4px 4px 0" }}>
-                                <div style={{ fontFamily: TOKEN.font.mono, fontSize: "0.58rem", letterSpacing: "0.15em", textTransform: "uppercase", color: TOKEN.accent, marginBottom: "0.5rem" }}>
-                                    Summary
-                                </div>
+                            <div style={{
+                                padding: "1.1rem 1.25rem", borderLeft: `3px solid ${TOKEN.accent}`,
+                                background: "#fdf4ef", borderRadius: "0 4px 4px 0",
+                            }}>
+                                <div style={{
+                                    fontFamily: TOKEN.font.mono, fontSize: "0.58rem", letterSpacing: "0.15em",
+                                    textTransform: "uppercase", color: TOKEN.accent, marginBottom: "0.5rem",
+                                }}>Summary</div>
                                 <div
-                                    contentEditable
-                                    suppressContentEditableWarning
-                                    onBlur={(e) => setEditSummary(e.target.textContent)}
+                                    contentEditable suppressContentEditableWarning
+                                    onBlur={e => setEditSummary(e.target.textContent)}
                                     style={{ fontSize: "0.88rem", lineHeight: 1.7 }}
                                 >{editSummary}</div>
                             </div>
 
-                            {/* Key points */}
+                            {/* Key Points */}
                             <div>
                                 <Label style={{ marginBottom: "0.75rem" }}>Key Points</Label>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
@@ -614,15 +633,15 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                                             style={{
                                                 display: "flex", alignItems: "flex-start", gap: "0.75rem",
                                                 padding: "0.85rem 1rem", border: `1.5px solid ${TOKEN.border}`,
-                                                borderRadius: 4, background: "white", transition: "border-color 0.2s, box-shadow 0.2s",
+                                                borderRadius: 4, background: "white",
+                                                transition: "border-color 0.2s, box-shadow 0.2s",
                                                 animation: `slideUp 0.3s ease ${i * 0.05}s both`,
-                                                position: "relative",
                                             }}
-                                            onMouseEnter={(e) => {
+                                            onMouseEnter={e => {
                                                 e.currentTarget.style.borderColor = TOKEN.highlight;
                                                 e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.05)";
                                             }}
-                                            onMouseLeave={(e) => {
+                                            onMouseLeave={e => {
                                                 e.currentTarget.style.borderColor = TOKEN.border;
                                                 e.currentTarget.style.boxShadow = "none";
                                             }}
@@ -632,29 +651,27 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
                                                 background: POINT_COLORS[pt.colorIdx],
                                             }} />
                                             <div
-                                                contentEditable
-                                                suppressContentEditableWarning
-                                                onBlur={(e) => updatePoint(pt.id, e.target.textContent)}
+                                                contentEditable suppressContentEditableWarning
+                                                onBlur={e => updatePoint(pt.id, e.target.textContent)}
                                                 style={{ flex: 1, fontSize: "0.87rem", lineHeight: 1.65, minWidth: 0 }}
                                             >{pt.text}</div>
                                             <button
                                                 className="point-del"
                                                 onClick={() => deletePoint(pt.id)}
                                                 style={{
-                                                    width: 24, height: 24, borderRadius: 3, border: `1px solid ${TOKEN.border}`,
-                                                    background: TOKEN.paper, cursor: "pointer", fontSize: "0.65rem",
+                                                    width: 24, height: 24, borderRadius: 3,
+                                                    border: `1px solid ${TOKEN.border}`, background: TOKEN.paper,
+                                                    cursor: "pointer", fontSize: "0.65rem",
                                                     display: "flex", alignItems: "center", justifyContent: "center",
-                                                    opacity: 0, transition: "opacity 0.15s, background 0.15s",
-                                                    flexShrink: 0,
+                                                    opacity: 0, transition: "opacity 0.15s, background 0.15s", flexShrink: 0,
                                                 }}
-                                                onMouseEnter={(e) => { e.currentTarget.style.background = "#B03838"; e.currentTarget.style.color = "white"; e.currentTarget.style.borderColor = "#B03838"; }}
-                                                onMouseLeave={(e) => { e.currentTarget.style.background = TOKEN.paper; e.currentTarget.style.color = TOKEN.ink; e.currentTarget.style.borderColor = TOKEN.border; }}
+                                                onMouseEnter={e => { e.currentTarget.style.background = "#B03838"; e.currentTarget.style.color = "white"; e.currentTarget.style.borderColor = "#B03838"; }}
+                                                onMouseLeave={e => { e.currentTarget.style.background = TOKEN.paper; e.currentTarget.style.color = TOKEN.ink; e.currentTarget.style.borderColor = TOKEN.border; }}
                                             >✕</button>
                                         </div>
                                     ))}
                                 </div>
 
-                                {/* Add note */}
                                 <button
                                     className="add-btn"
                                     onClick={addPoint}
@@ -672,9 +689,6 @@ ul{margin-top:0}li{font-size:11pt;line-height:1.6;margin-bottom:8pt}
             </div>
 
             {toast && <Toast msg={toast} />}
-
-            {/* jsPDF CDN for export */}
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" />
         </>
     );
 }
